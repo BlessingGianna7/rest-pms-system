@@ -1,177 +1,198 @@
-const pool = require('../config/db');
+const { Op, literal } = require('sequelize');
+const Vehicle = require('../models/Vehicle');
+const Request = require('../models/Request');
+const Log = require('../models/Log');
 
-const createVehicle = async (req, res) => {
+exports.createVehicle = async (req, res) => {
   const userId = req.user.id;
-  const { plate_number, vehicle_type, size, other_attributes } = req.body;
+  const { license_plate, type } = req.body;
+
   try {
-    const result = await pool.query(
-      'INSERT INTO vehicles (user_id, plate_number, vehicle_type, size, other_attributes) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [userId, plate_number, vehicle_type, size, other_attributes || {}]
-    );
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Vehicle ${plate_number} created`,
-    ]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(400).json({ error: 'Plate number already exists or server error' });
+    const vehicle = await Vehicle.create({
+      owner_id: userId,
+      license_plate,
+      type,
+    });
+
+    await Log.create({
+      user_id: userId,
+      action: `Vehicle ${license_plate} created`,
+    });
+
+    res.status(201).json(vehicle);
+  } catch (err) {
+    console.error('Create vehicle error:', err);
+    res
+      .status(400)
+      .json({ error: 'Plate number conflict or validation error', details: err.message });
   }
 };
 
-const getVehicles = async (req, res) => {
+exports.getVehicles = async (req, res) => {
   const userId = req.user.id;
   const isAdmin = req.user.role === 'admin';
-  const { page = 1, limit = 10, search = '' } = req.query;
-  const offset = (page - 1) * limit;
-  try {
-    const searchQuery = `%${search}%`;
-    let query, countQuery, params;
+  const pageNum = parseInt(req.query.page, 10) || 1;
+  const limitNum = parseInt(req.query.limit, 10) || 10;
+  const offset = (pageNum - 1) * limitNum;
+  const search = req.query.search || '';
 
-    if (isAdmin) {
-      // Admins see all vehicles
-      countQuery = `
-        SELECT COUNT(*) 
-        FROM vehicles 
-        WHERE plate_number ILIKE $1 OR vehicle_type ILIKE $1 OR CAST(id AS TEXT) ILIKE $1
-      `;
-      query = `
-        SELECT v.*, 
-               (SELECT request_status 
-                FROM slot_requests 
-                WHERE vehicle_id = v.id AND request_status = 'approved' 
-                LIMIT 1) AS approval_status
-        FROM vehicles v
-        WHERE plate_number ILIKE $1 OR vehicle_type ILIKE $1 OR CAST(id AS TEXT) ILIKE $1
-        ORDER BY id
-        LIMIT $2 OFFSET $3
-      `;
-      params = [searchQuery, limit, offset];
-    } else {
-      // Regular users see only their vehicles
-      countQuery = `
-        SELECT COUNT(*) 
-        FROM vehicles 
-        WHERE user_id = $1 AND (plate_number ILIKE $2 OR vehicle_type ILIKE $2)
-      `;
-      query = `
-        SELECT * 
-        FROM vehicles 
-        WHERE user_id = $1 AND (plate_number ILIKE $2 OR vehicle_type ILIKE $2)
-        ORDER BY id
-        LIMIT $3 OFFSET $4
-      `;
-      params = [userId, searchQuery, limit, offset];
+  try {
+    const where = {};
+    if (!isAdmin) {
+      where.owner_id = userId;
     }
 
-    const countResult = await pool.query(countQuery, isAdmin ? [searchQuery] : [userId, searchQuery]);
-    const totalItems = parseInt(countResult.rows[0].count);
+    if (search) {
+      const like = { [Op.iLike]: `%${search}%` };
+      where[Op.or] = isAdmin
+        ? [
+            { license_plate: like },
+            { type: like },
+            literal(`CAST("Vehicle"."id" AS TEXT) ILIKE '${like[Op.iLike]}'`)
+          ]
+        : [
+            { license_plate: like },
+            { type: like }
+          ];
+    }
 
-    const result = await pool.query(query, params);
+    const approvalStatusAttr = [
+      literal(`(
+        SELECT "request_status"
+        FROM "requests"
+        WHERE "vehicle_id" = "Vehicle"."id"
+          AND "request_status" = 'approved'
+        LIMIT 1
+      )`),
+      'approval_status'
+    ];
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'Vehicles list viewed',
-    ]);
+    const { rows, count } = await Vehicle.findAndCountAll({
+      where,
+      attributes: { include: [approvalStatusAttr] },
+      order: [['id', 'ASC']],
+      limit: limitNum,
+      offset,
+    });
+
+    await Log.create({
+      user_id: req.user.id,
+      action: 'Vehicles list viewed',
+    });
+
     res.json({
-      data: result.rows,
+      data: rows,
       meta: {
-        totalItems,
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalItems / limit),
-        limit: parseInt(limit),
+        totalItems: count,
+        currentPage: pageNum,
+        totalPages: Math.ceil(count / limitNum),
+        limit: limitNum,
       },
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
+  } catch (err) {
+    console.error('Get vehicles error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const getVehicleById = async (req, res) => {
+exports.getVehicleById = async (req, res) => {
   const { id } = req.params;
-  const isAdmin = req.user.role === 'admin';
-  const userId = req.user.id;
-  try {
-    let query = `
-      SELECT v.*, 
-             (SELECT request_status 
-              FROM slot_requests 
-              WHERE vehicle_id = v.id AND request_status = 'approved' 
-              LIMIT 1) AS approval_status
-      FROM vehicles v
-      WHERE v.id = $1
-    `;
-    const params = [id];
-
-    if (!isAdmin) {
-      query += ' AND v.user_id = $2';
-      params.push(userId);
-    }
-
-    const result = await pool.query(query, params);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Vehicle not found' });
-    }
-
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Vehicle ID ${id} viewed`,
-    ]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-const updateVehicle = async (req, res) => {
-  const userId = req.user.id;
-  const { id } = req.params;
-  const { plate_number, vehicle_type, size, other_attributes } = req.body;
-  try {
-    const result = await pool.query(
-      'UPDATE vehicles SET plate_number = $1, vehicle_type = $2, size = $3, other_attributes = $4 WHERE id = $5 AND user_id = $6 RETURNING *',
-      [plate_number, vehicle_type, size, other_attributes || {}, id, userId]
-    );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Vehicle not found' });
-    }
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Vehicle ${plate_number} updated`,
-    ]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(400).json({ error: 'Plate number already exists or server error' });
-  }
-};
-
-const deleteVehicle = async (req, res) => {
   const userId = req.user.id;
   const isAdmin = req.user.role === 'admin';
-  const { id } = req.params;
+
   try {
-    let query = 'DELETE FROM vehicles WHERE id = $1';
-    const params = [id];
+    const where = { id };
+    if (!isAdmin) where.owner_id = userId;
 
-    if (!isAdmin) {
-      query += ' AND user_id = $2';
-      params.push(userId);
-    }
+    const approvalStatusAttr = [
+      literal(`(
+        SELECT "request_status"
+        FROM "requests"
+        WHERE "vehicle_id" = "Vehicle"."id"
+          AND "request_status" = 'approved'
+        LIMIT 1
+      )`),
+      'approval_status'
+    ];
 
-    const result = await pool.query(query + ' RETURNING plate_number', params);
-    if (result.rowCount === 0) {
+    const vehicle = await Vehicle.findOne({
+      where,
+      attributes: { include: [approvalStatusAttr] },
+    });
+
+    if (!vehicle) {
       return res.status(404).json({ error: 'Vehicle not found' });
     }
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Vehicle ${result.rows[0].plate_number} deleted`,
-    ]);
+
+    await Log.create({
+      user_id: userId,
+      action: `Vehicle ID ${id} viewed`,
+    });
+
+    res.json(vehicle);
+  } catch (err) {
+    console.error('Get vehicle by ID error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
+
+exports.updateVehicle = async (req, res) => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  const { license_plate, type, size, other_attributes } = req.body;
+
+  try {
+    const where = { id };
+    if (req.user.role !== 'admin') where.owner_id = userId;
+
+    const vehicle = await Vehicle.findOne({ where });
+    if (!vehicle) {
+      return res.status(404).json({ error: 'Vehicle not found' });
+    }
+
+    if (license_plate)     vehicle.license_plate = license_plate;
+    if (type)              vehicle.type = type;
+    if (size)              vehicle.size = size;
+    if (other_attributes)  vehicle.other_attributes = other_attributes;
+
+    await vehicle.save();
+
+    await Log.create({
+      user_id: userId,
+      action: `Vehicle ${vehicle.license_plate} updated`,
+    });
+
+    res.json(vehicle);
+  } catch (err) {
+    console.error('Update vehicle error:', err);
+    res.status(400).json({ error: 'Plate conflict or validation error', details: err.message });
+  }
+};
+
+exports.deleteVehicle = async (req, res) => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  const isAdmin = req.user.role === 'admin';
+
+  try {
+    const where = { id };
+    if (!isAdmin) where.owner_id = userId;
+
+    const vehicle = await Vehicle.findOne({ where });
+    if (!vehicle) {
+      return res.status(404).json({ error: 'Vehicle not found' });
+    }
+
+    await vehicle.destroy();
+
+    await Log.create({
+      user_id: userId,
+      action: `Vehicle ${vehicle.license_plate} deleted`,
+    });
+
     res.json({ message: 'Vehicle deleted' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
+  } catch (err) {
+    console.error('Delete vehicle error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-module.exports = { createVehicle, getVehicles, getVehicleById, updateVehicle, deleteVehicle };

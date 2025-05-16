@@ -1,108 +1,116 @@
-const bcrypt = require('bcrypt');
-const pool = require('../config/db');
+// controllers/userController.js
+const bcrypt      = require('bcrypt');
+const { Op }      = require('sequelize');
+const User        = require('../models/User');
+const Log         = require('../models/Log');
 
-const getProfile = async (req, res) => {
+exports.getProfile = async (req, res) => {
   const userId = req.user.id;
   try {
-    const result = await pool.query('SELECT id, name, email, role FROM users WHERE id = $1', [
-      userId,
-    ]);
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'User profile viewed',
-    ]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    const user = await User.findByPk(userId, {
+      attributes: ['id','name','email','role']
+    });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    await Log.create({ user_id: userId, action: 'User profile viewed' });
+    res.json(user);
+  } catch (err) {
+    console.error('Get profile error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const updateProfile = async (req, res) => {
+exports.updateProfile = async (req, res) => {
   const userId = req.user.id;
   const { name, email, password } = req.body;
-  try {
-    const updates = [];
-    const values = [];
-    let paramIndex = 1;
 
-    if (name) {
-      updates.push(`name = $${paramIndex++}`);
-      values.push(name);
+  try {
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
-    if (email) {
-      updates.push(`email = $${paramIndex++}`);
-      values.push(email);
-    }
+
+    if (name)  user.name  = name;
+    if (email) user.email = email;
     if (password) {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      updates.push(`password = $${paramIndex++}`);
-      values.push(hashedPassword);
+      user.password = await bcrypt.hash(password, 10);
     }
 
-    if (updates.length === 0) {
-      return res.status(400).json({ error: 'No fields to update' });
-    }
+    await user.save();
+    await Log.create({ user_id: userId, action: 'Profile updated' });
 
-    values.push(userId);
-    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, email, role`;
-    const result = await pool.query(query, values);
-
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'Profile updated',
-    ]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(400).json({ error: 'Email already exists or server error' });
+    const { id, role } = user;
+    res.json({ id, name: user.name, email: user.email, role });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res
+      .status(400)
+      .json({ error: 'Email conflict or validation error', details: err.message });
   }
 };
 
-const getUsers = async (req, res) => {
-  const { page = 1, limit = 10, search = '' } = req.query;
-  const offset = (page - 1) * limit;  
+exports.getUsers = async (req, res) => {
+  const pageNum  = parseInt(req.query.page,  10) || 1;
+  const limitNum = parseInt(req.query.limit, 10) || 10;
+  const offset   = (pageNum - 1) * limitNum;
+  const search   = req.query.search || '';
+
   try {
-    const searchQuery = `%${search}%`;
-    const countResult = await pool.query(
-      'SELECT COUNT(*) FROM users WHERE name ILIKE $1 OR email ILIKE $1',
-      [searchQuery]
-    );
-    const totalItems = parseInt(countResult.rows[0].count);
+    // WHERE for search
+    const where = {};
+    if (search) {
+      const like = { [Op.iLike]: `%${search}%` };
+      where[Op.or] = [
+        { name:   like },
+        { email:  like }
+      ];
+    }
 
-    const result = await pool.query(
-      'SELECT id, name, email, role, is_verified FROM users WHERE name ILIKE $1 OR email ILIKE $1 ORDER BY id LIMIT $2 OFFSET $3',
-      [searchQuery, limit, offset]
-    );
-
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      req.user.id,
-      'Users list viewed',
-    ]);
-    res.json({
-      data: result.rows,
-      meta: {
-        totalItems,
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalItems / limit),
-        limit: parseInt(limit),
-      },
+    const { rows, count } = await User.findAndCountAll({
+      where,
+      attributes: ['id','name','email','role','is_verified'],
+      order: [['id','ASC']],
+      limit: limitNum,
+      offset
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+
+    await Log.create({ user_id: req.user.id, action: 'Users list viewed' });
+
+    res.json({
+      data: rows,
+      meta: {
+        totalItems:  count,
+        currentPage: pageNum,
+        totalPages:  Math.ceil(count/limitNum),
+        limit:       limitNum
+      }
+    });
+  } catch (err) {
+    console.error('Get users error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const deleteUser = async (req, res) => {
+
+exports.deleteUser = async (req, res) => {
+  const userId = req.user.id;
   const { id } = req.params;
+
   try {
-    await pool.query('DELETE FROM users WHERE id = $1', [id]);
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      req.user.id,
-      `User ${id} deleted`,
-    ]);
+    await Otp.destroy({ where: { user_id: id } });
+
+    // Then delete the user
+    const deleted = await User.destroy({ where: { id } });
+    if (!deleted) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await Log.create({ user_id: userId, action: `User ${id} deleted` });
     res.json({ message: 'User deleted' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-module.exports = { getProfile, updateProfile, getUsers, deleteUser };

@@ -1,51 +1,54 @@
-const pool = require('../config/db');
+// controllers/logController.js
+const { Op } = require('sequelize');
+const Log     = require('../models/Log');
 
-const getLogs = async (req, res) => {
-  const userId = req.user.id;
-  const { page = 1, limit = 10, search = '' } = req.query;
-  const offset = (page - 1) * limit;
+exports.getLogs = async (req, res) => {
+  const userId    = req.user.id;
+  const role      = req.user.role;
+  const pageNum   = parseInt(req.query.page,  10) || 1;
+  const limitNum  = parseInt(req.query.limit, 10) || 10;
+  const offset    = (pageNum - 1) * limitNum;
+  const search    = req.query.search || '';
 
-  if (req.user.role !== 'admin') {
+  if (role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
   try {
-    const searchQuery = `%${search}%`;
-    const query = `
-      SELECT * FROM logs
-      WHERE action ILIKE $1 OR user_id::text ILIKE $1
-      ORDER BY created_at DESC
-      LIMIT $2 OFFSET $3
-    `;
-    const countQuery = `
-      SELECT COUNT(*) FROM logs
-      WHERE action ILIKE $1 OR user_id::text ILIKE $1
-    `;
-    const params = [searchQuery, limit, offset];
+    // Build WHERE clause for search
+    const where = {};
+    if (search) {
+      const possibleId = parseInt(search, 10);
+      where[Op.or] = [
+        { action:  { [Op.iLike]: `%${search}%` } },
+        ...(Number.isInteger(possibleId) 
+            ? [{ user_id: { [Op.eq]: possibleId } }] 
+            : [])
+      ];
+    }
 
-    const countResult = await pool.query(countQuery, [searchQuery]);
-    const totalItems = parseInt(countResult.rows[0].count);
+    // Fetch paginated logs
+    const { rows, count } = await Log.findAndCountAll({
+      where,
+      order:  [['created_at','DESC']],
+      limit:  limitNum,
+      offset
+    });
 
-    const result = await pool.query(query, params);
-
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'Logs list viewed',
-    ]);
+    // Audit this view
+    await Log.create({ user_id: userId, action: 'Logs list viewed' });
 
     res.json({
-      data: result.rows,
+      data: rows,
       meta: {
-        totalItems,
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalItems / limit),
-        limit: parseInt(limit),
-      },
+        totalItems:  count,
+        currentPage: pageNum,
+        totalPages:  Math.ceil(count / limitNum),
+        limit:       limitNum
+      }
     });
-  } catch (error) {
-    console.error('Get logs error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+  } catch (err) {
+    console.error('Get logs error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-module.exports = { getLogs };

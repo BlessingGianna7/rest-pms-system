@@ -1,273 +1,340 @@
-const pool = require('../config/db');
+// controllers/requestController.js
+
+const { Op }        = require('sequelize');
+const Request = require('../models/Request');
+
+const  Vehicle   = require('../models/Vehicle');
+const  ParkingSlot = require('../models/ParkingSlot');
+const  Log        = require('../models/Log');
+const User       = require('../models/User');
 const { sendApprovalEmail, sendRejectionEmail } = require('../utils/email');
+const sequelize      = require('../config/database');
 
-const createRequest = async (req, res) => {
-  const userId = req.user.id;
-  const { vehicle_id } = req.body;
+exports.createRequest = async (req, res) => {
+  const userId    = req.user.id;
+  const { vehicle_id, slot_id } = req.body;
+
   try {
-    const vehicleResult = await pool.query('SELECT * FROM vehicles WHERE id = $1 AND user_id = $2', [
+    // Ensure vehicle belongs to user if provided
+    if (vehicle_id) {
+      const vehicle = await Vehicle.findOne({
+        where: { id: vehicle_id, owner_id: userId }
+      });
+      if (!vehicle) {
+        return res.status(404).json({ error: 'Vehicle not found' });
+      }
+    }
+
+const slot = await ParkingSlot.findOne({
+  where: { id: slot_id, status: 'free' }
+});
+if (!slot) {
+  return res.status(404).json({ error: 'Slot not found or unavailable' });
+}
+
+
+    // Create the request with slot_id and optional vehicle_id
+    const request = await Request.create({
+      user_id : userId,
+      slot_id,
       vehicle_id,
-      userId,
-    ]);
-    if (vehicleResult.rowCount === 0) {
-      return res.status(404).json({ error: 'Vehicle not found' });
-    }
-
-    const result = await pool.query(
-      'INSERT INTO slot_requests (user_id, vehicle_id, request_status) VALUES ($1, $2, $3) RETURNING *',
-      [userId, vehicle_id, 'pending']
-    );
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot request created for vehicle ${vehicle_id}`,
-    ]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Create request error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
-  }
-};
-
-const getRequests = async (req, res) => {
-  const userId = req.user.id;
-  const { page = 1, limit = 10, search = '' } = req.query;
-  const offset = (page - 1) * limit;
-  const isAdmin = req.user.role === 'admin';
-  try {
-    const searchQuery = `%${search}%`;
-    let query = `
-      SELECT sr.*, v.plate_number, v.vehicle_type
-      FROM slot_requests sr
-      JOIN vehicles v ON sr.vehicle_id = v.id
-      WHERE (v.plate_number ILIKE $1 OR sr.request_status ILIKE $1)
-    `;
-    let countQuery = `
-      SELECT COUNT(*)
-      FROM slot_requests sr
-      JOIN vehicles v ON sr.vehicle_id = v.id
-      WHERE (v.plate_number ILIKE $1 OR sr.request_status ILIKE $1)
-    `;
-    const params = [searchQuery];
-
-    if (!isAdmin) {
-      query += ' AND sr.user_id = $2';
-      countQuery += ' AND sr.user_id = $2';
-      params.push(userId);
-    }
-
-    query += ' ORDER BY sr.id LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
-    params.push(limit, offset);
-
-    const countResult = await pool.query(countQuery, params.slice(0, -2));
-    const totalItems = parseInt(countResult.rows[0].count);
-
-    const result = await pool.query(query, params);
-
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'Slot requests list viewed',
-    ]);
-    res.json({
-      data: result.rows,
-      meta: {
-        totalItems,
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalItems / limit),
-        limit: parseInt(limit),
-      },
+      request_status: 'pending'
     });
-  } catch (error) {
-    console.error('Get requests error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+
+    // Log
+await Log.create({
+  user_id: userId,
+  action: `Slot request created for vehicle ${vehicle_id || 'N/A'} and slot ${slot_id}`
+});
+
+
+    res.status(201).json(request);
+  } catch (err) {
+    console.error('Create request error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const updateRequest = async (req, res) => {
-  const userId = req.user.id;
-  const { id } = req.params;
-  const { vehicle_id } = req.body;
+
+exports.getRequests = async (req, res) => {
+  const userId  = req.user.id;
+  const isAdmin = req.user.role === 'admin';
+  const page    = parseInt(req.query.page,  10) || 1;
+  const limit   = parseInt(req.query.limit, 10) || 10;
+  const offset  = (page - 1) * limit;
+  const search  = req.query.search || '';
+
   try {
-    const vehicleResult = await pool.query('SELECT * FROM vehicles WHERE id = $1 AND user_id = $2', [
-      vehicle_id,
-      userId,
-    ]);
-    if (vehicleResult.rowCount === 0) {
+    // build base WHERE
+    const where = {};
+    if (!isAdmin) {
+      where.user_id = userId;
+    }
+    if (search) {
+      where[Op.or] = [
+        { request_status: { [Op.iLike]: `%${search}%` } },
+        // allow searching by license_plate via include
+        sequelize.where(
+          sequelize.col('Vehicle.license_plate'),
+          { [Op.iLike]: `%${search}%` }
+        )
+      ];
+    }
+
+    // fetch with pagination and join on Vehicle
+    const { rows, count } = await Request.findAndCountAll({
+      where,
+      include: [{
+        model: Vehicle,
+        attributes: ['license_plate', 'type']
+      }],
+      order: [['id','ASC']],
+      limit,
+      offset
+    });
+
+    // log the action
+    await Log.create({
+      user_id: userId,
+      action:  'Slot requests list viewed'
+    });
+
+    res.json({
+      data: rows,
+      meta: {
+        totalItems:  count,
+        currentPage: page,
+        totalPages:  Math.ceil(count / limit),
+        limit
+      }
+    });
+  } catch (err) {
+    console.error('Get requests error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
+
+exports.updateRequest = async (req, res) => {
+  const userId    = req.user.id;
+  const { id }    = req.params;
+  const { vehicle_id } = req.body;
+
+  try {
+    // ensure vehicle belongs to user
+    const vehicle = await Vehicle.findOne({
+      where: { id: vehicle_id, owner_id: userId }
+    });
+    if (!vehicle) {
       return res.status(404).json({ error: 'Vehicle not found' });
     }
 
-    const result = await pool.query(
-      'UPDATE slot_requests SET vehicle_id = $1 WHERE id = $2 AND user_id = $3 AND request_status = $4 RETURNING *',
-      [vehicle_id, id, userId, 'pending']
+    // only pending requests can be updated
+    const [updatedCount, [updatedReq]] = await Request.update(
+      { vehicle_id },
+      {
+        where: {
+          id,
+          user_id:       userId,
+          request_status:'pending'
+        },
+        returning: true
+      }
     );
-    if (result.rowCount === 0) {
+    if (updatedCount === 0) {
       return res.status(404).json({ error: 'Request not found or not editable' });
     }
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot request ${id} updated`,
-    ]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Update request error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+
+    await Log.create({
+      user_id: userId,
+      action:  `Slot request ${id} updated`
+    });
+
+    res.json(updatedReq);
+  } catch (err) {
+    console.error('Update request error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const deleteRequest = async (req, res) => {
+exports.deleteRequest = async (req, res) => {
   const userId = req.user.id;
   const { id } = req.params;
+
   try {
-    const result = await pool.query(
-      'DELETE FROM slot_requests WHERE id = $1 AND user_id = $2 AND request_status = $3 RETURNING *',
-      [id, userId, 'pending']
-    );
-    if (result.rowCount === 0) {
+    // only pending requests can be deleted
+    const request = await Request.findOne({
+      where: { id, user_id: userId, request_status: 'pending' }
+    });
+    if (!request) {
       return res.status(404).json({ error: 'Request not found or not deletable' });
     }
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot request ${id} deleted`,
-    ]);
+
+    await request.destroy();
+
+    await Log.create({
+      user_id: userId,
+      action:  `Slot request ${id} deleted`
+    });
+
     res.json({ message: 'Request deleted' });
-  } catch (error) {
-    console.error('Delete request error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+  } catch (err) {
+    console.error('Delete request error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const approveRequest = async (req, res) => {
-  const userId = req.user.id;
-  const { id } = req.params;
-
+exports.approveRequest = async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
-  try {
-    const requestResult = await pool.query(
-      'SELECT sr.*, v.vehicle_type, v.size, v.plate_number, u.email ' +
-      'FROM slot_requests sr ' +
-      'JOIN vehicles v ON sr.vehicle_id = v.id ' +
-      'JOIN users u ON sr.user_id = u.id ' +
-      'WHERE sr.id = $1 AND sr.request_status = $2',
-      [id, 'pending']
-    );
+  const adminId = req.user.id;
+  const { id } = req.params;
 
-    if (requestResult.rowCount === 0) {
+  const t = await sequelize.transaction();
+try{
+
+
+    const request = await Request.findOne({
+      where: { id, request_status: 'pending' },
+      transaction: t,
+      lock: t.LOCK.UPDATE
+    });
+    if (!request) {
+      await t.rollback();
       return res.status(404).json({ error: 'Request not found or already processed' });
     }
 
-    const { vehicle_type, size, plate_number, user_id, email } = requestResult.rows[0];
 
-    const slotResult = await pool.query(
-      'SELECT * FROM parking_slots WHERE vehicle_type = $1 AND size = $2 AND status = $3 LIMIT 1',
-      [vehicle_type, size, 'available']
-    );
-
-    if (slotResult.rowCount === 0) {
-      return res.status(400).json({ error: 'No compatible slots available' });
+    const vehicle = await Vehicle.findOne({
+      where: { id: request.vehicle_id },
+      transaction: t
+    });
+    if (!vehicle) {
+      await t.rollback();
+      return res.status(404).json({ error: 'Vehicle not found' });
     }
 
-    const slot = slotResult.rows[0];
+  
+    const user = await User.findOne({
+      where: { id: request.user_id },
+      transaction: t
+    });
+    if (!user) {
+      await t.rollback();
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    await pool.query('BEGIN');
 
-    await pool.query(
-      'UPDATE slot_requests ' +
-      'SET request_status = $1, slot_id = $2, slot_number = $3, approved_at = CURRENT_TIMESTAMP ' +
-      'WHERE id = $4',
-      ['approved', slot.id, slot.slot_number, id]
-    );
+    const slot = await ParkingSlot.findOne({
+      where: {
+  
+        status: 'free'
+      },
+      transaction: t,
+      lock: t.LOCK.UPDATE
+    });
+    if (!slot) {
+      await t.rollback();
+      return res.status(400).json({ error: 'No free slots available' });
+    }
 
-    await pool.query(
-      'UPDATE parking_slots SET status = $1 WHERE id = $2',
-      ['unavailable', slot.id]
-    );
 
-    await pool.query('COMMIT');
+    await request.update({
+      request_status: 'approved',
+      slot_id: slot.id,
+      slot_number: slot.slot_number,
+      approved_at: sequelize.fn('NOW')
+    }, { transaction: t });
 
+    await slot.update({ status: 'unavailable' }, { transaction: t });
+
+    await t.commit();
+
+    // Send email (outside transaction)
     let emailStatus = 'sent';
     try {
-      console.log('Attempting to send approval email to:', email);
-      await sendApprovalEmail(email, slot.slot_number, { plate_number }, slot.location);
-    } catch (emailError) {
-      console.error('Email sending error:', emailError);
+      await sendApprovalEmail(user.email, slot.slot_number, { license_plate: vehicle.license_plate }, slot.location);
+    } catch (emailErr) {
+      console.error('Approval email error:', emailErr);
       emailStatus = 'failed';
     }
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot request ${id} approved, assigned slot ${slot.slot_number}, email ${emailStatus}`,
-    ]);
+
+    await Log.create({
+      user_id: adminId,
+      action: `Slot request ${id} approved, slot ${slot.slot_number}, email ${emailStatus}`
+    });
 
     res.json({ message: 'Request approved', slot, emailStatus });
-  } catch (error) {
-    await pool.query('ROLLBACK');
-    console.error('Approve request error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+
+  } catch (err) {
+    await t.rollback();
+    console.error('Approve request error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const rejectRequest = async (req, res) => {
-  const userId = req.user.id;
-  const { id } = req.params;
-  const { reason } = req.body; 
 
+exports.rejectRequest = async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
+  const adminId = req.user.id;
+  const { id }  = req.params;
+  const { reason } = req.body;
 
   if (!reason) {
     return res.status(400).json({ error: 'Rejection reason is required' });
   }
 
   try {
-    const requestResult = await pool.query(
-      'SELECT sr.*, v.plate_number, v.vehicle_type, v.size, u.email ' +
-      'FROM slot_requests sr ' +
-      'JOIN vehicles v ON sr.vehicle_id = v.id ' +
-      'JOIN users u ON sr.user_id = u.id ' +
-      'WHERE sr.id = $1 AND sr.request_status = $2',
-      [id, 'pending']
-    );
-
-    if (requestResult.rowCount === 0) {
+    // load request + vehicle + user(email)
+    const request = await Request.findOne({
+      where: { id, request_status: 'pending' },
+      include: [
+        { model: Vehicle, attributes: ['type','license_plate'] },
+        { model: User,    attributes: ['email'] }
+      ]
+    });
+    if (!request) {
       return res.status(404).json({ error: 'Request not found or already processed' });
     }
 
-    const { plate_number, vehicle_type, size, email } = requestResult.rows[0];
+    const slotLocRow = await ParkingSlot.findOne({
+      where: {
+        vehicle_type: request.Vehicle.type,
+   
+      },
+      attributes: ['location']
+    });
+    const slotLocation = slotLocRow ? slotLocRow.location : 'unknown';
 
-    const slotResult = await pool.query(
-      'SELECT location FROM parking_slots WHERE vehicle_type = $1 AND size = $2 LIMIT 1',
-      [vehicle_type, size]
-    );
+    // update request
+    await request.update({ request_status: 'denied' });
 
-    const slotLocation = slotResult.rowCount > 0 ? slotResult.rows[0].location : 'unknown';
-
-    const result = await pool.query(
-      'UPDATE slot_requests SET request_status = $1 WHERE id = $2 AND request_status = $3 RETURNING *',
-      ['rejected', id, 'pending']
-    );
-
+    // send rejection email
     let emailStatus = 'sent';
     try {
-      console.log('Attempting to send rejection email to:', email);
-      await sendRejectionEmail(email, { plate_number }, slotLocation, reason);
-    } catch (emailError) {
-      console.error('Email sending error:', emailError);
+      await sendRejectionEmail(
+        request.User.email,
+        { license_plate: request.Vehicle.license_plate },
+        slotLocation,
+        reason
+      );
+    } catch (emailErr) {
+      console.error('Rejection email error:', emailErr);
       emailStatus = 'failed';
     }
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot request ${id} rejected with reason: ${reason}, email ${emailStatus}`,
-    ]);
+    await Log.create({
+      user_id: adminId,
+      action:  `Slot request ${id} rejected: ${reason}, email ${emailStatus}`
+    });
 
-    res.json({ message: 'Request rejected', request: result.rows[0], emailStatus });
-  } catch (error) {
-    console.error('Reject request error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+    res.json({ message: 'Request rejected', request, emailStatus });
+  } catch (err) {
+    console.error('Reject request error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-module.exports = { createRequest, getRequests, updateRequest, deleteRequest, approveRequest, rejectRequest };

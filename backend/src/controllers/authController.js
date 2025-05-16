@@ -1,161 +1,159 @@
-const pool = require('../config/db');
+// controllers/authController.js
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+const jwt    = require('jsonwebtoken');
+const { Op } = require('sequelize');
+
+const User = require('../models/User');
+const Otp  = require('../models/Otp');
+const Log  = require('../models/Log');
 const { sendOtpEmail } = require('../utils/email');
 
-const register = async (req, res) => {
+exports.register = async (req, res) => {
   const { name, email, password } = req.body;
-
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required' });
   }
 
   try {
-    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userResult.rowCount > 0) {
+    // check for existing user
+    const existing = await User.findOne({ where: { email } });
+    if (existing) {
       return res.status(400).json({ error: 'Email already exists' });
     }
 
-    const adminResult = await pool.query('SELECT COUNT(*) FROM users WHERE role = $1', ['admin']);
-    if (adminResult.rows[0].count > 0) {
-      console.log('Admin already exists, only user role allowed');
+    // optional: ensure only one admin ever
+    const adminCount = await User.count({ where: { role: 'admin' } });
+    if (adminCount > 0) {
+      console.log('Admin already exists, this will be a user account');
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes from now
+    // create user
+    const hash = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      name,
+      email,
+      password:    hash,
+      role:        'user',
+      is_verified: false
+    });
 
-    const result = await pool.query(
-      'INSERT INTO users (name, email, password, role, is_verified) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [name, email, hashedPassword, 'user', false]
-    );
+    // generate and store OTP
+    const code      = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    await Otp.create({
+      user_id:     user.id,
+      otp_code:    code,
+      expires_at:  expiresAt,
+      is_verified: false
+    });
 
-    const user = result.rows[0];
-
-    await pool.query(
-      'INSERT INTO otps (user_id, otp_code, expires_at) VALUES ($1, $2, $3)',
-      [user.id, otpCode, expiresAt]
-    );
-
+    // send email
     try {
-      await sendOtpEmail(email, otpCode);
+      await sendOtpEmail(email, code);
       console.log('OTP email sent to:', email);
-    } catch (emailError) {
-      console.error('Email sending error:', emailError);
+    } catch (e) {
+      console.error('Email send failed:', e);
       return res.status(500).json({ error: 'Failed to send OTP email' });
     }
 
-    res.status(201).json({ message: 'User registered, OTP sent to email', userId: user.id });
-  } catch (error) {
-    console.error('Register error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+    res.status(201).json({ message: 'User registered, OTP sent', userId: user.id });
+  } catch (err) {
+    console.error('Register error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const verifyOtp = async (req, res) => {
+exports.verifyOtp = async (req, res) => {
   const { userId, otpCode } = req.body;
-
   if (!userId || !otpCode) {
     return res.status(400).json({ error: 'User ID and OTP code are required' });
   }
 
   try {
-    const otpResult = await pool.query(
-      'SELECT * FROM otps WHERE user_id = $1 AND otp_code = $2 AND expires_at > NOW() AND is_verified = FALSE',
-      [userId, otpCode]
-    );
-
-    if (otpResult.rowCount === 0) {
+    const otp = await Otp.findOne({
+      where: {
+        user_id:    userId,
+        otp_code:   otpCode,
+        expires_at: { [Op.gt]: new Date() },
+        is_verified: false
+      }
+    });
+    if (!otp) {
       return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
-    await pool.query('UPDATE otps SET is_verified = TRUE WHERE user_id = $1 AND otp_code = $2', [
-      userId,
-      otpCode,
-    ]);
+    // mark OTP & user verified
+    await otp.update({ is_verified: true });
+    await User.update({ is_verified: true }, { where: { id: userId } });
 
-    await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [userId]);
+    // log it
+    await Log.create({ user_id: userId, action: 'User verified OTP' });
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'User verified OTP',
-    ]);
-
-    res.json({ message: 'OTP verified, user registration completed' });
-  } catch (error) {
-    console.error('Verify OTP error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+    res.json({ message: 'OTP verified, registration complete' });
+  } catch (err) {
+    console.error('Verify OTP error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const resendOtp = async (req, res) => {
+exports.resendOtp = async (req, res) => {
   const { userId } = req.body;
-
   if (!userId) {
     return res.status(400).json({ error: 'User ID is required' });
   }
 
   try {
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1 AND is_verified = FALSE', [
-      userId,
-    ]);
-
-    if (userResult.rowCount === 0) {
+    const user = await User.findOne({ where: { id: userId, is_verified: false } });
+    if (!user) {
       return res.status(400).json({ error: 'User not found or already verified' });
     }
 
-    const user = userResult.rows[0];
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // delete old OTPs & create a new one
+    await Otp.destroy({ where: { user_id: userId } });
+    const code      = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    await Otp.create({
+      user_id:     userId,
+      otp_code:    code,
+      expires_at:  expiresAt,
+      is_verified: false
+    });
 
-    await pool.query('DELETE FROM otps WHERE user_id = $1', [userId]);
-
-    await pool.query(
-      'INSERT INTO otps (user_id, otp_code, expires_at) VALUES ($1, $2, $3)',
-      [userId, otpCode, expiresAt]
-    );
-
+    // email
     try {
-      await sendOtpEmail(user.email, otpCode);
-      console.log('Resent OTP email to:', user.email);
-    } catch (emailError) {
-      console.error('Email sending error:', emailError);
-      return res.status(500).json({ error: 'Failed to resend OTP email' });
+      await sendOtpEmail(user.email, code);
+      console.log('Resent OTP to:', user.email);
+    } catch (e) {
+      console.error('Email send failed:', e);
+      return res.status(500).json({ error: 'Failed to resend OTP' });
     }
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      'OTP resent',
-    ]);
-
+    // log
+    await Log.create({ user_id: userId, action: 'OTP resent' });
     res.json({ message: 'OTP resent to email' });
-  } catch (error) {
-    console.error('Resend OTP error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+  } catch (err) {
+    console.error('Resend OTP error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const login = async (req, res) => {
+exports.login = async (req, res) => {
   const { email, password } = req.body;
-
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
   try {
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (result.rowCount === 0) {
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-
-    const user = result.rows[0];
-
     if (!user.is_verified) {
-      return res.status(403).json({ error: 'Account not verified. Please verify OTP.' });
+      return res.status(403).json({ error: 'Account not verified' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -164,17 +162,14 @@ const login = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
+    await Log.create({ user_id: user.id, action: 'User logged in' });
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      user.id,
-      'User logged in',
-    ]);
-
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+    res.json({
+      token,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-module.exports = { register, login, verifyOtp, resendOtp };

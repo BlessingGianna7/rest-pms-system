@@ -1,51 +1,65 @@
-const express = require('express');
-const cors = require('cors');
-const swaggerUi = require('swagger-ui-express');
-const swaggerSpec = require('./swagger');
-const { initializeDatabase } = require('./config/dbInit');
-const authRoutes = require('./routes/authRoutes');
-const userRoutes = require('./routes/userRoutes');
+require('dotenv').config();
+const express       = require('express');
+const swaggerUi     = require('swagger-ui-express');
+const sequelize     = require('./config/database');
+const swaggerSpec   = require('./swagger');
+
+const authRoutes    = require('./routes/authRoutes');
+const userRoutes    = require('./routes/userRoutes');
 const vehicleRoutes = require('./routes/vehicleRoutes');
-const slotRoutes = require('./routes/slotRoutes');
+const slotRoutes    = require('./routes/slotRoutes');
 const requestRoutes = require('./routes/requestRoutes');
-const logRoutes = require('./routes/logRoutes');
+const logRoutes     = require('./routes/logRoutes');
+require('./models/associations')
+
 
 const app = express();
-
-app.use(cors());
 app.use(express.json());
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.use('/api/auth',         authRoutes);
+app.use('/api/users',        userRoutes);
+app.use('/api/vehicles',     vehicleRoutes);
+app.use('/api/parking-slots',slotRoutes);
+app.use('/api/slot-requests',requestRoutes);
+app.use('/api/logs',         logRoutes);
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/vehicles', vehicleRoutes);
-app.use('/api/parking-slots', slotRoutes);
-app.use('/api/slot-requests', requestRoutes);
-app.use('/api/logs', logRoutes);
-
-const PORT = process.env.PORT || 5000;
-
-// Start the server after initializing the database
-const startServer = async () => {
+(async () => {
   try {
-    // Initialize database tables
-    const dbInitialized = await initializeDatabase();
-    
-    if (dbInitialized) {
-      // Start the server
-      app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-        console.log(`API Documentation available at http://localhost:${PORT}/api-docs`);
-      });
-    } else {
-      console.error('Failed to initialize database. Server not started.');
-      process.exit(1);
-    }
-  } catch (error) {
-    console.error('Error starting server:', error);
+    await sequelize.authenticate();
+    console.log('✅ Database connection established');
+
+    // OPTIONAL: Clean up if you previously had an ENUM type
+    await sequelize.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'enum_users_role') THEN
+          DROP TYPE enum_users_role;
+        END IF;
+      END
+      $$;
+    `);
+
+    // Manually make sure 'role' column is plain VARCHAR with default 'user'
+    await sequelize.query(`
+      ALTER TABLE users 
+        ALTER COLUMN role DROP DEFAULT,
+        ALTER COLUMN role DROP NOT NULL,
+        ALTER COLUMN role TYPE VARCHAR USING role::text,
+        ALTER COLUMN role SET DEFAULT 'user',
+        ALTER COLUMN role SET NOT NULL;
+    `);
+
+    // Sync models (but avoid altering existing columns again)
+    await sequelize.sync(); // no `{ alter: true }` here
+    console.log('✅ Models synchronized');
+
+    const port = process.env.PORT || 5000;
+    app.listen(port, () => {
+      console.log(`🚀 Server listening on http://localhost:${port}`);
+      console.log(`📖 Swagger docs at http://localhost:${port}/api/docs`);
+    });
+  } catch (err) {
+    console.error('❌ Unable to start server:', err);
     process.exit(1);
   }
-};
-
-// Run the server
-startServer();
+})();

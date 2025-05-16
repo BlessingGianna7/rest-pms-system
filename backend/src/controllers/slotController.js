@@ -1,120 +1,131 @@
-const pool = require('../config/db');
+// controllers/slotController.js
+const { Op }       = require('sequelize');
+const ParkingSlot  = require('../models/ParkingSlot');
+const Log          = require('../models/Log');
 
-const bulkCreateSlots = async (req, res) => {
+exports.bulkCreateSlots = async (req, res) => {
   const userId = req.user.id;
-  const { slots } = req.body; // Array of { slot_number, size, vehicle_type, location }
+  const { slots } = req.body;
+
   try {
-    const values = slots.map(
-      (slot, index) =>
-        `($${index * 4 + 1}, $${index * 4 + 2}, $${index * 4 + 3}, $${index * 4 + 4})`
-    );
-    const query = `
-      INSERT INTO parking_slots (slot_number, size, vehicle_type, location)
-      VALUES ${values.join(', ')}
-      RETURNING *
-    `;
-    const flatValues = slots.flatMap((slot) => [
-      slot.slot_number,
-      slot.size,
-      slot.vehicle_type,
-      slot.location,
-    ]);
-    const result = await pool.query(query, flatValues);
+   
+    const created = await ParkingSlot.bulkCreate(slots, { returning: true });
 
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Bulk created ${slots.length} slots`,
-    ]);
-    res.status(201).json(result.rows);
-  } catch (error) {
-    res.status(400).json({ error: 'Slot number already exists or server error' });
-  }
-};
-
-const getSlots = async (req, res) => {
-  const { page = 1, limit = 10, search = '' } = req.query;
-  const offset = (page - 1) * limit;
-  const isAdmin = req.user.role === 'admin';
-  try {
-    const searchQuery = `%${search}%`;
-    let query = 'SELECT * FROM parking_slots WHERE slot_number ILIKE $1 OR vehicle_type ILIKE $1';
-    let countQuery =
-      'SELECT COUNT(*) FROM parking_slots WHERE slot_number ILIKE $1 OR vehicle_type ILIKE $1';
-    const params = [searchQuery];
-
-    if (!isAdmin) {
-      query += ' AND status = $2';
-      countQuery += ' AND status = $2';
-      params.push('available');
-    }
-
-    query += ' ORDER BY id LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
-    params.push(limit, offset);
-
-    const countResult = await pool.query(countQuery, params.slice(0, -2));
-    const totalItems = parseInt(countResult.rows[0].count);
-
-    const result = await pool.query(query, params);
-
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      req.user.id,
-      'Slots list viewed',
-    ]);
-    res.json({
-      data: result.rows,
-      meta: {
-        totalItems,
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalItems / limit),
-        limit: parseInt(limit),
-      },
+    // Audit log
+    await Log.create({
+      user_id: userId,
+      action:  `Bulk created ${created.length} slots`
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+
+    res.status(201).json(created);
+  } catch (err) {
+    console.error('Bulk create slots error:', err);
+    res
+      .status(400)
+      .json({ error: 'Slot number conflict or validation error', details: err.message });
   }
 };
 
-const updateSlot = async (req, res) => {
-  const userId = req.user.id;
-  const { id } = req.params;
-  const { slot_number, size, vehicle_type, location } = req.body;
+exports.getSlots = async (req, res) => {
+  const pageNum  = parseInt(req.query.page,  10) || 1;
+  const limitNum = parseInt(req.query.limit, 10) || 10;
+  const offset   = (pageNum - 1) * limitNum;
+  const search   = req.query.search || '';
+  const isAdmin  = req.user.role === 'admin';
+
   try {
-    const result = await pool.query(
-      'UPDATE parking_slots SET slot_number = $1, size = $2, vehicle_type = $3, location = $4 WHERE id = $5 RETURNING *',
-      [slot_number, size, vehicle_type, location, id]
-    );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Slot not found' });
+   
+    const where = {};
+    if (search) {
+      const like = { [Op.iLike]: `%${search}%` };
+      where[Op.or] = [
+        { slot_number: { [Op.eq]: parseInt(search,10) || 0 } },
+        { vehicle_type }
+          ? { vehicle_type: like }
+          : null
+      ].filter(Boolean);
     }
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot ${slot_number} updated`,
-    ]);
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(400).json({ error: 'Slot number already exists or server error' });
+    if (!isAdmin) {
+      where.status = 'free';
+    }
+
+    // Query
+    const { rows, count } = await ParkingSlot.findAndCountAll({
+      where,
+      order: [['id', 'ASC']],
+      limit: limitNum,
+      offset
+    });
+
+    // Audit
+    await Log.create({
+      user_id: req.user.id,
+      action:  'Slots list viewed'
+    });
+
+    res.json({
+      data: rows,
+      meta: {
+        totalItems:  count,
+        currentPage: pageNum,
+        totalPages:  Math.ceil(count/limitNum),
+        limit:       limitNum
+      }
+    });
+  } catch (err) {
+    console.error('Get slots error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
 
-const deleteSlot = async (req, res) => {
+exports.updateSlot = async (req, res) => {
   const userId = req.user.id;
   const { id } = req.params;
+  const updates = (({ slot_number,vehicle_type, location }) => 
+    ({ slot_number, vehicle_type, location }))(req.body);
+
   try {
-    const result = await pool.query(
-      'DELETE FROM parking_slots WHERE id = $1 RETURNING slot_number',
-      [id]
-    );
-    if (result.rowCount === 0) {
+    const slot = await ParkingSlot.findByPk(id);
+    if (!slot) {
       return res.status(404).json({ error: 'Slot not found' });
     }
-    await pool.query('INSERT INTO logs (user_id, action) VALUES ($1, $2)', [
-      userId,
-      `Slot ${result.rows[0].slot_number} deleted`,
-    ]);
+
+    await slot.update(updates);
+
+    await Log.create({
+      user_id: userId,
+      action:  `Slot ${slot.slot_number} updated`
+    });
+
+    res.json(slot);
+  } catch (err) {
+    console.error('Update slot error:', err);
+    res
+      .status(400)
+      .json({ error: 'Slot number conflict or validation error', details: err.message });
+  }
+};
+
+exports.deleteSlot = async (req, res) => {
+  const userId = req.user.id;
+  const { id } = req.params;
+
+  try {
+    const slot = await ParkingSlot.findByPk(id);
+    if (!slot) {
+      return res.status(404).json({ error: 'Slot not found' });
+    }
+
+    await slot.destroy();
+
+    await Log.create({
+      user_id: userId,
+      action:  `Slot ${slot.slot_number} deleted`
+    });
+
     res.json({ message: 'Slot deleted' });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+  } catch (err) {
+    console.error('Delete slot error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-module.exports = { bulkCreateSlots, getSlots, updateSlot, deleteSlot };
