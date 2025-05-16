@@ -275,7 +275,6 @@ try{
   }
 };
 
-
 exports.rejectRequest = async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
@@ -304,7 +303,6 @@ exports.rejectRequest = async (req, res) => {
     const slotLocRow = await ParkingSlot.findOne({
       where: {
         vehicle_type: request.Vehicle.type,
-   
       },
       attributes: ['location']
     });
@@ -313,26 +311,14 @@ exports.rejectRequest = async (req, res) => {
     // update request
     await request.update({ request_status: 'denied' });
 
-    // send rejection email
-    let emailStatus = 'sent';
-    try {
-      await sendRejectionEmail(
-        request.User.email,
-        { license_plate: request.Vehicle.license_plate },
-        slotLocation,
-        reason
-      );
-    } catch (emailErr) {
-      console.error('Rejection email error:', emailErr);
-      emailStatus = 'failed';
-    }
+    // REMOVE EMAIL LOGIC HERE
 
     await Log.create({
       user_id: adminId,
-      action:  `Slot request ${id} rejected: ${reason}, email ${emailStatus}`
+      action:  `Slot request ${id} rejected: ${reason}`
     });
 
-    res.json({ message: 'Request rejected', request, emailStatus });
+    res.json({ message: 'Request rejected', request });
   } catch (err) {
     console.error('Reject request error:', err);
     res.status(500).json({ error: 'Server error', details: err.message });

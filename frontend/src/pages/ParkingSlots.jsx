@@ -7,7 +7,7 @@ import {
   deleteParkingSlot,
 } from '../utils/api';
 import Pagination from '../components/common/Pagination';
-import { FaTachometerAlt, FaCar, FaParking, FaHistory } from 'react-icons/fa';
+
 
 const ParkingSlots = () => {
   const [slots, setSlots] = useState([]);
@@ -19,11 +19,7 @@ const ParkingSlots = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [bulkForm, setBulkForm] = useState({ count: '', vehicle_type: '' });
-  const [editForm, setEditForm] = useState({ 
-    slot_number: '', 
-    vehicle_type: '', 
-    status: '' 
-  });
+  const [editForm, setEditForm] = useState({ slot_number: '', vehicle_type: '', status: '' });
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
@@ -38,7 +34,6 @@ const ParkingSlots = () => {
       setMeta(response.data.meta);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to fetch parking slots');
-      console.error('Fetch error:', err);
     } finally {
       setLoading(false);
     }
@@ -62,25 +57,20 @@ const ParkingSlots = () => {
     e.preventDefault();
     setError('');
     const { count, vehicle_type } = bulkForm;
-    
     if (!count || !vehicle_type) {
       setError('All fields are required');
       return;
     }
-    
     const countNum = parseInt(count);
     if (isNaN(countNum)) {
       setError('Count must be a number');
       return;
     }
-    
     if (countNum <= 0 || countNum > 100) {
       setError('Count must be between 1 and 100');
       return;
     }
-
     setIsCreating(true);
-    
     try {
       const prefix = `SLOT-${Math.floor(Math.random() * 1000)}`;
       const slots = Array.from({ length: countNum }, (_, i) => ({
@@ -88,9 +78,7 @@ const ParkingSlots = () => {
         vehicle_type,
         status: 'available'
       }));
-
       await createBulkParkingSlots({ slots });
-      
       setBulkForm({ count: '', vehicle_type: '' });
       setShowBulkModal(false);
       await fetchSlots();
@@ -98,7 +86,6 @@ const ParkingSlots = () => {
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Failed to create parking slots';
       setError(errorMsg);
-      console.error('Creation error:', err);
     } finally {
       setIsCreating(false);
     }
@@ -108,24 +95,13 @@ const ParkingSlots = () => {
     e.preventDefault();
     setError('');
     const { slot_number, vehicle_type, status } = editForm;
-    
     if (!slot_number || !vehicle_type || !status) {
       setError('All fields are required');
       return;
     }
-
     try {
-      await updateParkingSlot(editId, { 
-        slot_number, 
-        vehicle_type, 
-        status 
-      });
-      
-      setEditForm({ 
-        slot_number: '', 
-        vehicle_type: '', 
-        status: '' 
-      });
+      await updateParkingSlot(editId, { slot_number, vehicle_type, status });
+      setEditForm({ slot_number: '', vehicle_type: '', status: '' });
       setIsEditing(false);
       setEditId(null);
       await fetchSlots();
@@ -133,7 +109,6 @@ const ParkingSlots = () => {
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Failed to update parking slot';
       setError(errorMsg);
-      console.error('Update error:', err);
     }
   };
 
@@ -151,7 +126,6 @@ const ParkingSlots = () => {
     if (!window.confirm('Are you sure you want to delete this parking slot?')) {
       return;
     }
-
     try {
       await deleteParkingSlot(id);
       await fetchSlots();
@@ -159,201 +133,116 @@ const ParkingSlots = () => {
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Failed to delete parking slot';
       setError(errorMsg);
-      console.error('Deletion error:', err);
     }
   };
 
-  const handleNavigation = (path) => {
-    window.location.href = path;
-  };
+
 
   return (
-    <div className="min-h-screen bg-pastel-blue-50 flex">
-      {/* Sidebar */}
-      <aside className="w-64 bg-baby-green-100 p-6 h-screen fixed shadow-lg">
-        <h2 className="text-2xl font-bold text-white mb-6">Parking System</h2>
-        <nav>
-          <button
-            onClick={() => handleNavigation('/')}
-            className="w-full flex items-center text-left py-2 px-4 mb-2 rounded-lg bg-baby-green-100 text-white hover:bg-baby-green-200 transition-all duration-300"
-          >
-            <FaTachometerAlt className="mr-2" /> Dashboard
-          </button>
-          <button
-            onClick={() => handleNavigation('/vehicles')}
-            className="w-full flex items-center text-left py-2 px-4 mb-2 rounded-lg bg-baby-green-100 text-white hover:bg-baby-green-200 transition-all duration-300"
-          >
-            <FaCar className="mr-2" /> Vehicles
-          </button>
-          <button
-            onClick={() => handleNavigation('/parking-slots')}
-            className="w-full flex items-center text-left py-2 px-4 mb-2 rounded-lg bg-baby-green-100 text-white hover:bg-baby-green-200 transition-all duration-300"
-          >
-            <FaParking className="mr-2" /> Parking Slots
-          </button>
-          <button
-            onClick={() => handleNavigation('/logs')}
-            className="w-full flex items-center text-left py-2 px-4 mb-2 rounded-lg bg-baby-green-100 text-white hover:bg-baby-green-200 transition-all duration-300"
-          >
-            <FaHistory className="mr-2" /> Activity Logs
-          </button>
-        </nav>
-      </aside>
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-green-100 to-green-200 flex">
 
-      {/* Main Content */}
-      <main className="flex-1 p-6 ml-64">
-        <h1 className="text-3xl font-bold text-navy-blue-700 mb-6">Parking Slots</h1>
-        
-        <div className="mb-4 flex justify-between items-center">
+      <main className="flex-1 p-8 ">
+        <h1 className="text-3xl font-extrabold text-green-800 mb-8">Parking Slots</h1>
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <input
             type="text"
             placeholder="Search by slot number or vehicle type"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="input w-full sm:w-1/2 border border-navy-blue-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-secondary"
+            className="input w-full sm:w-1/2 border border-green-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-green-400"
           />
           <button
             onClick={() => setShowBulkModal(true)}
-            className="bg-baby-green-100 text-white font-semibold py-2 px-4 rounded-lg hover:bg-baby-green-200 transition-all duration-300 disabled:opacity-50"
-            disabled={isCreating}
+            className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition"
           >
-            {isCreating ? 'Creating...' : 'Create Bulk Slots'}
+            Add Bulk Slots
           </button>
         </div>
-
-        {error && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
-          <p>{error}</p>
-        </div>}
-
+        {error && <p className="text-red-500 mb-4">{error}</p>}
         {loading ? (
-          <div className="flex justify-center py-8">
-            <div className="animate-spin h-10 w-10 border-4 border-navy-blue-500 border-t-transparent rounded-full"></div>
+          <div className="flex justify-center">
+            <div className="animate-spin h-8 w-8 border-4 border-green-400 border-t-transparent rounded-full"></div>
           </div>
         ) : (
-          <>
-            <div className="bg-white rounded-lg shadow-lg overflow-x-auto border border-navy-blue-200">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-navy-blue-700">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">ID</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Slot Number</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Vehicle Type</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Actions</th>
+          <div className="bg-white rounded-lg shadow-lg overflow-x-auto border border-green-100">
+            <table className="min-w-full">
+              <thead>
+                <tr className="bg-green-200 text-green-900">
+                  <th className="p-3 text-left">Slot Number</th>
+                  <th className="p-3 text-left">Vehicle Type</th>
+                  <th className="p-3 text-left">Status</th>
+                  <th className="p-3 text-left">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {slots.map((slot) => (
+                  <tr key={slot.id} className="border-b hover:bg-green-50">
+                    <td className="p-3">{slot.slot_number}</td>
+                    <td className="p-3 capitalize">{slot.vehicle_type}</td>
+                    <td className="p-3 capitalize">{slot.status}</td>
+                    <td className="p-3 flex gap-2">
+                      <button
+                        onClick={() => handleEdit(slot)}
+                        className="bg-yellow-400 text-white px-3 py-1 rounded hover:bg-yellow-500 transition"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(slot.id)}
+                        className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600 transition"
+                      >
+                        Delete
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {slots.length > 0 ? (
-                    slots.map((slot) => (
-                      <tr key={slot.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-navy-blue-700">{slot.id}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-navy-blue-700">{slot.slot_number}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-navy-blue-700">{slot.vehicle_type}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                            ${slot.status === 'available' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                            {slot.status === 'available' ? 'Available' : 'Occupied'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <div className="flex space-x-2">
-                            <button
-                              onClick={() => handleEdit(slot)}
-                              className="text-navy-blue-700 hover:text-navy-blue-900"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDelete(slot.id)}
-                              className="text-red-600 hover:text-red-900"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan="5" className="px-6 py-4 text-center text-sm text-navy-blue-700">
-                        No parking slots found
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            
-            <Pagination meta={meta} setPage={setPage} />
-          </>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
+        <Pagination meta={meta} setPage={setPage} />
 
-        {/* Bulk Create Modal */}
         {showBulkModal && (
           <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md border border-navy-blue-200">
-              <h2 className="text-xl font-bold text-navy-blue-700 mb-4">Create Bulk Parking Slots</h2>
-              
-              {error && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4">
-                <p>{error}</p>
-              </div>}
-              
+            <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
+              <h2 className="text-xl font-bold text-green-700 mb-4">Add Bulk Parking Slots</h2>
               <form onSubmit={handleBulkSubmit}>
                 <div className="mb-4">
-                  <label className="block text-navy-blue-700 text-sm font-bold mb-2" htmlFor="count">
-                    Number of Slots (1-100)
-                  </label>
+                  <label className="block mb-1">Count</label>
                   <input
                     type="number"
-                    id="count"
                     name="count"
                     value={bulkForm.count}
                     onChange={handleBulkInputChange}
-                    className="shadow appearance-none border border-navy-blue-300 rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-secondary"
+                    className="input w-full border border-green-300 rounded-lg p-2"
                     min="1"
                     max="100"
-                    required
                   />
                 </div>
-                
                 <div className="mb-4">
-                  <label className="block text-navy-blue-700 text-sm font-bold mb-2" htmlFor="vehicle_type">
-                    Vehicle Type
-                  </label>
-                  <select
-                    id="vehicle_type"
+                  <label className="block mb-1">Vehicle Type</label>
+                  <input
+                    type="text"
                     name="vehicle_type"
                     value={bulkForm.vehicle_type}
                     onChange={handleBulkInputChange}
-                    className="shadow appearance-none border border-navy-blue-300 rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-secondary"
-                    required
-                  >
-                    <option value="">Select Vehicle Type</option>
-                    <option value="car">Car</option>
-                    <option value="taxi">Taxi</option>
-                    <option value="truck">Truck</option>
-                    <option value="any">Any</option>
-                  </select>
+                    className="input w-full border border-green-300 rounded-lg p-2"
+                  />
                 </div>
-                
-                <div className="flex justify-end space-x-2">
+                <div className="flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowBulkModal(false);
-                      setError('');
-                    }}
-                    className="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline"
-                    disabled={isCreating}
+                    onClick={() => setShowBulkModal(false)}
+                    className="bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400 transition"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="bg-baby-green-100 text-white font-semibold py-2 px-4 rounded-lg hover:bg-baby-green-200 transition-all duration-300 focus:outline-none focus:shadow-outline"
+                    className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition"
                     disabled={isCreating}
                   >
-                    {isCreating ? 'Creating...' : 'Create Slots'}
+                    {isCreating ? 'Creating...' : 'Create'}
                   </button>
                 </div>
               </form>
@@ -361,87 +250,54 @@ const ParkingSlots = () => {
           </div>
         )}
 
-        {/* Edit Modal */}
         {isEditing && (
           <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md border border-navy-blue-200">
-              <h2 className="text-xl font-bold text-navy-blue-700 mb-4">Edit Parking Slot</h2>
-              
-              {error && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4">
-                <p>{error}</p>
-              </div>}
-              
+            <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
+              <h2 className="text-xl font-bold text-green-700 mb-4">Edit Parking Slot</h2>
               <form onSubmit={handleEditSubmit}>
                 <div className="mb-4">
-                  <label className="block text-navy-blue-700 text-sm font-bold mb-2" htmlFor="edit-slot_number">
-                    Slot Number
-                  </label>
+                  <label className="block mb-1">Slot Number</label>
                   <input
                     type="text"
-                    id="edit-slot_number"
                     name="slot_number"
                     value={editForm.slot_number}
                     onChange={handleEditInputChange}
-                    className="shadow appearance-none border border-navy-blue-300 rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-secondary"
-                    required
+                    className="input w-full border border-green-300 rounded-lg p-2"
                   />
                 </div>
-                
                 <div className="mb-4">
-                  <label className="block text-navy-blue-700 text-sm font-bold mb-2" htmlFor="edit-vehicle_type">
-                    Vehicle Type
-                  </label>
-                  <select
-                    id="edit-vehicle_type"
+                  <label className="block mb-1">Vehicle Type</label>
+                  <input
+                    type="text"
                     name="vehicle_type"
                     value={editForm.vehicle_type}
                     onChange={handleEditInputChange}
-                    className="shadow appearance-none border border-navy-blue-300 rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-secondary"
-                    required
-                  >
-                    <option value="">Select Vehicle Type</option>
-                    <option value="car">Car</option>
-                    <option value="taxi">Taxi</option>
-                    <option value="truck">Truck</option>
-                    <option value="any">Any</option>
-                  </select>
+                    className="input w-full border border-green-300 rounded-lg p-2"
+                  />
                 </div>
-                
                 <div className="mb-4">
-                  <label className="block text-navy-blue-700 text-sm font-bold mb-2" htmlFor="edit-status">
-                    Status
-                  </label>
-                  <select
-                    id="edit-status"
+                  <label className="block mb-1">Status</label>
+                  <input
+                    type="text"
                     name="status"
                     value={editForm.status}
                     onChange={handleEditInputChange}
-                    className="shadow appearance-none border border-navy-blue-300 rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-secondary"
-                    required
-                  >
-                    <option value="">Select Status</option>
-                    <option value="available">Available</option>
-                    <option value="unavailable">Occupied</option>
-                  </select>
+                    className="input w-full border border-green-300 rounded-lg p-2"
+                  />
                 </div>
-                
-                <div className="flex justify-end space-x-2">
+                <div className="flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsEditing(false);
-                      setEditId(null);
-                      setError('');
-                    }}
-                    className="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline"
+                    onClick={() => setIsEditing(false)}
+                    className="bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400 transition"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="bg-baby-green-100 text-white font-semibold py-2 px-4 rounded-lg hover:bg-baby-green-200 transition-all duration-300 focus:outline-none focus:shadow-outline"
+                    className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition"
                   >
-                    Update Slot
+                    Save
                   </button>
                 </div>
               </form>

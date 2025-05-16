@@ -8,8 +8,11 @@ exports.bulkCreateSlots = async (req, res) => {
   const { slots } = req.body;
 
   try {
-   
-    const created = await ParkingSlot.bulkCreate(slots, { returning: true });
+   const slotsWithFreeStatus = slots.map(slot => ({
+  ...slot,
+  status: 'free'
+}));
+    const created = await ParkingSlot.bulkCreate(slotsWithFreeStatus, { returning: true });
 
     // Audit log
     await Log.create({
