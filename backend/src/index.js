@@ -3,7 +3,7 @@ const express       = require('express');
 const swaggerUi     = require('swagger-ui-express');
 const sequelize     = require('./config/database');
 const swaggerSpec   = require('./swagger');
-
+const cors = require('cors');
 const authRoutes    = require('./routes/authRoutes');
 const userRoutes    = require('./routes/userRoutes');
 const vehicleRoutes = require('./routes/vehicleRoutes');
@@ -13,7 +13,9 @@ const logRoutes     = require('./routes/logRoutes');
 require('./models/associations')
 
 
+
 const app = express();
+app.use(cors());
 app.use(express.json());
 app.use('/api/auth',         authRoutes);
 app.use('/api/users',        userRoutes);

@@ -1,6 +1,7 @@
 // controllers/userController.js
 const bcrypt      = require('bcrypt');
 const { Op }      = require('sequelize');
+const Otp = require('../models/Otp');
 const User        = require('../models/User');
 const Log         = require('../models/Log');
 
