@@ -55,7 +55,6 @@ const Vehicles = () => {
                 <th className="p-3 text-left">ID</th>
                 <th className="p-3 text-left">Plate Number</th>
                 <th className="p-3 text-left">Vehicle Type</th>
-                <th className="p-3 text-left">Size</th>
                 <th className="p-3 text-left">User ID</th>
               </tr>
             </thead>
@@ -63,10 +62,9 @@ const Vehicles = () => {
               {vehicles.map((vehicle) => (
                 <tr key={vehicle.id} className="border-b hover:bg-accent">
                   <td className="p-3">{vehicle.id}</td>
-                  <td className="p-3">{vehicle.plate_number}</td>
-                  <td className="p-3">{vehicle.vehicle_type}</td>
-                  <td className="p-3">{vehicle.size}</td>
-                  <td className="p-3">{vehicle.user_id}</td>
+                  <td className="p-3">{vehicle.license_plate || 'N/A'}</td>
+                  <td className="p-3">{vehicle.type || 'N/A'}</td>
+                  <td className="p-3">{vehicle.owner_id || 'N/A'}</td>
                 </tr>
               ))}
             </tbody>

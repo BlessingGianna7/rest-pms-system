@@ -105,7 +105,7 @@ const SlotRequests = () => {
             <thead>
               <tr className="bg-primary text-white">
                 <th className="p-3 text-left">ID</th>
-                <th className="p-3 text-left">Plate Number</th>
+                <th className="p-3 text-left">License Plate</th>
                 <th className="p-3 text-left">Vehicle Type</th>
                 <th className="p-3 text-left">Status</th>
                 <th className="p-3 text-left">Actions</th>
@@ -115,8 +115,8 @@ const SlotRequests = () => {
               {requests.map((req) => (
                 <tr key={req.id} className="border-b hover:bg-accent">
                   <td className="p-3">{req.id}</td>
-                  <td className="p-3">{req.plate_number}</td>
-                  <td className="p-3 capitalize">{req.vehicle_type}</td>
+                  <td className="p-3">{req.Vehicle?.license_plate || 'N/A'}</td>
+                  <td className="p-3 capitalize">{req.Vehicle?.type || 'N/A'}</td>
                   <td className="p-3">{getStatusBadge(req.request_status)}</td>
                   <td className="p-3">
                     {req.request_status.toLowerCase() === 'pending' ? (
@@ -191,12 +191,12 @@ const SlotRequests = () => {
             </h2>
             <div className="space-y-3">
               <div>
-                <p className="font-semibold">Plate Number:</p>
-                <p>{selectedRequestDetails.plate_number}</p>
+                <p className="font-semibold">License Plate:</p>
+                <p>{selectedRequestDetails.Vehicle?.license_plate || 'N/A'}</p>
               </div>
               <div>
                 <p className="font-semibold">Vehicle Type:</p>
-                <p className="capitalize">{selectedRequestDetails.vehicle_type}</p>
+                <p className="capitalize">{selectedRequestDetails.Vehicle?.type || 'N/A'}</p>
               </div>
               <div>
                 <p className="font-semibold">Status:</p>
